@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Next Micro-Action Decision Engine</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg: #07090e;
+      --card-bg: rgba(17, 24, 39, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --input-bg: #0d131f;
+      
+      --accent: #10b981;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --accent-hover: #059669;
+      
+      --text: #f9fafb;
+      --text-muted: #9ca3af;
+      --text-subtle: #6b7280;
+      
+      --border: #1f2937;
+      --code-bg: #030712;
+      --radius-lg: 16px;
+      --radius-md: 10px;
+      --radius-sm: 6px;
+      --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.08) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(17, 24, 39, 0.5) 0%, transparent 40%);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 1.5rem;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .matrix-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-lg);
+      width: 100%;
+      max-width: 640px;
+      padding: 2.25rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7),
+                  0 0 0 1px rgba(255, 255, 255, 0.05);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Ambient top glow bar */
+    .matrix-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0.8;
+    }
+
+    header {
+      margin-bottom: 2rem;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    h1 .status-dot {
+      width: 8px;
+      height: 8px;
+      background-color: var(--accent);
+      border-radius: 50%;
+      box-shadow: 0 0 10px var(--accent);
+      display: inline-block;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      margin-top: 0.35rem;
+    }
+
+    /* Input Grid */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    label {
+      font-size: 0.725rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+
+    .select-wrapper {
+      position: relative;
+    }
+
+    .select-wrapper::after {
+      content: '▾';
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      position: absolute;
+      right: 1rem;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    select {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      font-size: 0.9rem;
+      font-weight: 500;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+      transition: var(--transition);
+    }
+
+    select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    /* Primary Action Button */
+    .btn-execute {
+      width: 100%;
+      padding: 1rem;
+      background-color: var(--accent);
+      color: #022c22;
+      border: none;
+      border-radius: var(--radius-md);
+      font-weight: 700;
+      font-size: 0.95rem;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: var(--transition);
+      box-shadow: 0 4px 14px var(--accent-glow);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .btn-execute:hover {
+      background-color: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px var(--accent-glow);
+    }
+
+    .btn-execute:active {
+      transform: translateY(0);
+    }
+
+    /* Output Section */
+    .output-section {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 1rem 0;
+      animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .output-section.active {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.98); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .action-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.85rem;
+      background-color: rgba(16, 185, 129, 0.08);
+      color: var(--accent);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: 9999px;
+      font-size: 0.725rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1.25rem;
+    }
+
+    .action-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      line-height: 1.5;
+      margin-bottom: 2rem;
+      max-width: 480px;
+      color: #ffffff;
+    }
+
+    /* Circular SVG Timer */
+    .timer-container {
+      position: relative;
+      width: 200px;
+      height: 200px;
+      margin-bottom: 2rem;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .timer-svg {
+      transform: rotate(-90deg);
+      width: 100%;
+      height: 100%;
+    }
+
+    .timer-circle-bg {
+      fill: none;
+      stroke: var(--border);
+      stroke-width: 6;
+    }
+
+    .timer-circle-progress {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 6;
+      stroke-linecap: round;
+      stroke-dasharray: 565.48; /* 2 * PI * r (r=90) */
+      stroke-dashoffset: 0;
+      transition: stroke-dashoffset 1s linear, stroke 0.3s ease;
+    }
+
+    .timer-display {
+      position: absolute;
+      font-size: 2.75rem;
+      font-weight: 800;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text);
+      letter-spacing: -0.03em;
+    }
+
+    .timer-controls {
+      display: flex;
+      gap: 0.75rem;
+      width: 100%;
+    }
+
+    .btn-secondary {
+      flex: 1;
+      padding: 0.85rem;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--radius-md);
+      font-weight: 600;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .btn-secondary:hover {
+      background-color: var(--border);
+      color: #fff;
+    }
+
+    /* Accordion / Lesson Module */
+    .lesson-panel {
+      margin-top: 2rem;
+      border-top: 1px dashed var(--border);
+      padding-top: 1.25rem;
+    }
+
+    details {
+      width: 100%;
+    }
+
+    summary {
+      list-style: none;
+      color: var(--accent);
+      font-size: 0.825rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      user-select: none;
+      transition: var(--transition);
+    }
+
+    summary::-webkit-details-marker {
+      display: none;
+    }
+
+    summary:hover {
+      opacity: 0.85;
+    }
+
+    summary .chevron {
+      font-size: 0.7rem;
+      transition: transform 0.2s ease;
+    }
+
+    details[open] summary .chevron {
+      transform: rotate(90deg);
+    }
+
+    .lesson-content {
+      margin-top: 0.85rem;
+      background-color: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 1.25rem;
+      font-size: 0.825rem;
+      line-height: 1.6;
+      color: var(--text-muted);
+    }
+
+    .lesson-content h3 {
+      color: var(--text);
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .lesson-content p {
+      margin-bottom: 0.75rem;
+    }
+
+    .lesson-content p:last-child {
+      margin-bottom: 0;
+    }
+
+    .lesson-content code {
+      color: var(--accent);
+      background-color: rgba(16, 185, 129, 0.1);
+      padding: 0.15rem 0.35rem;
+      border-radius: var(--radius-sm);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.775rem;
+    }
+  </style>
+</head>
+<body>
+
+  <main class="matrix-card">
+    <div id="selectorForm">
+      <header>
+        <h1><span class="status-dot"></span> Decision Engine</h1>
+        <p class="subtitle">Eliminate friction. Select capacity and trigger immediate execution.</p>
+      </header>
+      
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="energy">Current Energy Level</label>
+          <div class="select-wrapper">
+            <select id="energy">
+              <option value="low">Low Energy (Recovery / Depleted Context)</option>
+              <option value="medium" selected>Medium Energy (Steady Operational Execution)</option>
+              <option value="high">High Energy (Peak Performance / Deep Focus)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="time">Available Time Window</label>
+          <div class="select-wrapper">
+            <select id="time">
+              <option value="5">5 Minutes (Frictionless Micro-Win)</option>
+              <option value="15" selected>15 Minutes (Focused Task Block)</option>
+              <option value="30">30 Minutes (Deep Execution Sprint)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="context">Execution Context</label>
+          <div class="select-wrapper">
+            <select id="context">
+              <option value="solo">Solo Execution (Code / Web Asset Management)</option>
+              <option value="physical">Environment (System Setup / Declutter)</option>
+              <option value="outreach">Outreach & Strategic Pipelines</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-execute" onclick="generateAction()">
+        <span>Initialize Task Sprint</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+      </button>
+    </div>
+
+    <div id="outputSection" class="output-section">
+      <div class="action-badge" id="actionBadge">Micro-Action Active</div>
+      <div class="action-title" id="actionText">Executing high-yield micro-step...</div>
+      
+      <div class="timer-container">
+        <svg class="timer-svg" viewBox="0 0 200 200">
+          <circle class="timer-circle-bg" cx="100" cy="100" r="90" />
+          <circle class="timer-circle-progress" id="timerProgress" cx="100" cy="100" r="90" />
+        </svg>
+        <div class="timer-display" id="timerDisplay">00:00</div>
+      </div>
+
+      <div class="timer-controls">
+        <button class="btn-secondary" id="toggleBtn" onclick="toggleTimer()">Pause</button>
+        <button class="btn-secondary" onclick="resetMatrix()">Complete / Reset</button>
+      </div>
+    </div>
+
+    <section class="lesson-panel">
+      <details>
+        <summary>
+          <span class="chevron">▶</span>
+          <span>Advanced Architecture Lesson: System Capacity & Decision Elimination</span>
+        </summary>
+        <div class="lesson-content">
+          <h3>Architectural Insight: Overcoming High-Performer Bottlenecks</h3>
+          <p>Driven individuals rarely fail due to laziness; they fail due to <strong>system complexity overload</strong>. High performers tend to over-architect solutions, creating massive planning friction before writing a single line of execution.</p>
+          <p><strong>1. Finite State Selection vs. Infinite Choice:</strong> This matrix operates as a deterministic finite-state machine (<code>O(1)</code> lookup time). It maps <code>(Energy, Time, Context)</code> directly to a single action key, stripping away choice overhead.</p>
+          <p><strong>2. Bounded Execution Constraints:</strong> By strictly capping execution time via an automated visual loop, your system forces high focus and eliminates premature over-engineering.</p>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <script>
+    // Audio Synthesizer Engine (Zero external assets needed)
+    const AudioEngine = {
+      ctx: null,
+      init() {
+        if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      },
+      playTone(freq, type, duration) {
+        this.init();
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+        gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + duration);
+      },
+      playStart() { this.playTone(523.25, 'sine', 0.2); }, // C5
+      playPause() { this.playTone(349.23, 'triangle', 0.15); }, // F4
+      playComplete() {
+        this.playTone(523.25, 'sine', 0.15);
+        setTimeout(() => this.playTone(659.25, 'sine', 0.15), 100);
+        setTimeout(() => this.playTone(783.99, 'sine', 0.3), 200);
+      }
+    };
+
+    const actionDatabase = {
+      low: {
+        solo: {
+          5: "Refactor a single variable name or format 10 lines of unorganized CSS.",
+          15: "Delete or archive unused digital assets from your primary workspace.",
+          30: "Read and annotate documentation for one web API or utility library."
+        },
+        physical: {
+          5: "Clear off all non-essential items from your physical desk area.",
+          15: "Wipe down screen, keyboard, and organize essential hard tools.",
+          30: "Organize primary work area to remove all physical drag."
+        },
+        outreach: {
+          5: "Send a 1-sentence confirmation or quick status update to a contact.",
+          15: "Draft a standardized text template for upcoming application emails.",
+          30: "Audit your application tracker and remove obsolete contacts."
+        }
+      },
+      medium: {
+        solo: {
+          5: "Write down the exact 3 micro-steps needed to start your next goal.",
+          15: "Fix one isolated UI bug or layout misalignment in your web project.",
+          30: "Draft a complete HTML boilerplate component for your next layout feature."
+        },
+        physical: {
+          5: "Organize digital cables, adapters, and peripheral gear.",
+          15: "Perform a quick hardware/software update check on primary systems.",
+          30: "Audit local project directories and archive completed build folders."
+        },
+        outreach: {
+          5: "Bookmark 3 target job listings or funding opportunities.",
+          15: "Send one direct follow-up message regarding an outstanding application.",
+          30: "Tailor your standard portfolio narrative for a specific opportunity."
+        }
+      },
+      high: {
+        solo: {
+          5: "Draft the core architecture diagram or data schema for your next module.",
+          15: "Implement dynamic event handlers or state management for your component.",
+          30: "Build out an entire responsive frontend component from scratch."
+        },
+        physical: {
+          5: "Configure a distraction-free environment layout for deep work.",
+          15: "Streamline your primary physical workstation for maximum workflow velocity.",
+          30: "Execute a full environment reset and prep workspace for tomorrow."
+        },
+        outreach: {
+          5: "Send a targeted professional connection request.",
+          15: "Refine your master portfolio bio for high-tier application submissions.",
+          30: "Complete and submit a high-priority grant or work proposal."
+        }
+      }
+    };
+
+    let timerInterval = null;
+    let totalSeconds = 0;
+    let secondsLeft = 0;
+    let isRunning = false;
+    const circleCircumference = 2 * Math.PI * 90; // 565.48
+
+    function generateAction() {
+      const energy = document.getElementById('energy').value;
+      const time = document.getElementById('time').value;
+      const context = document.getElementById('context').value;
+
+      const action = actionDatabase[energy]?.[context]?.[time] || "Execute one single high-priority action.";
+
+      document.getElementById('actionText').innerText = action;
+      document.getElementById('actionBadge').innerText = `${energy} energy • ${time} min • ${context}`;
+      
+      totalSeconds = parseInt(time, 10) * 60;
+      secondsLeft = totalSeconds;
+      
+      updateTimerDisplay();
+      updateProgressCircle();
+
+      document.getElementById('selectorForm').style.display = 'none';
+      document.getElementById('outputSection').classList.add('active');
+
+      AudioEngine.playStart();
+      startTimer();
+    }
+
+    function updateTimerDisplay() {
+      const mins = Math.floor(secondsLeft / 60);
+      const secs = secondsLeft % 60;
+      const formatted = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      
+      document.getElementById('timerDisplay').innerText = formatted;
+      if (isRunning) {
+        document.title = `${formatted} - Micro-Action Active`;
+      }
+    }
+
+    function updateProgressCircle() {
+      const circle = document.getElementById('timerProgress');
+      const offset = circleCircumference - (secondsLeft / totalSeconds) * circleCircumference;
+      circle.style.strokeDashoffset = offset;
+    }
+
+    function startTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      isRunning = true;
+      document.getElementById('toggleBtn').innerText = 'Pause';
+      
+      timerInterval = setInterval(() => {
+        if (secondsLeft > 0) {
+          secondsLeft--;
+          updateTimerDisplay();
+          updateProgressCircle();
+        } else {
+          clearInterval(timerInterval);
+          isRunning = false;
+          document.getElementById('timerDisplay').innerText = "DONE";
+          document.getElementById('toggleBtn').innerText = 'Finished';
+          document.title = "Action Complete!";
+          AudioEngine.playComplete();
+        }
+      }, 1000);
+    }
+
+    function toggleTimer() {
+      if (isRunning) {
+        clearInterval(timerInterval);
+        isRunning = false;
+        document.getElementById('toggleBtn').innerText = 'Resume';
+        document.title = "Paused - Micro-Action Engine";
+        AudioEngine.playPause();
+      } else if (secondsLeft > 0) {
+        AudioEngine.playStart();
+        startTimer();
+      }
+    }
+
+    function resetMatrix() {
+      if (timerInterval) clearInterval(timerInterval);
+      isRunning = false;
+      secondsLeft = 0;
+      document.title = "Next Micro-Action Decision Engine";
+      
+      document.getElementById('outputSection').classList.remove('active');
+      document.getElementById('selectorForm').style.display = 'block';
+    }
+  </script>
+</body>
+</html>
