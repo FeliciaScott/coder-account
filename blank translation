@@ -1,0 +1,2632 @@
+<script>
+/* =========================================================
+   PORTFOLIO OPERATOR
+   ACCOUNTABILITY + WORK SUBMISSION ENGINE
+   ========================================================= */
+
+const STORAGE_KEY = "portfolioOperator";
+const DB_NAME = "portfolioOperatorEvidence";
+const DB_VERSION = 1;
+const MAX_XP = 1000;
+
+/* =========================================================
+   MISSION SUBMISSION RULES
+   Change these to match your actual missions.
+   ========================================================= */
+
+const submissionRules = {
+
+    0: {
+        title: "Artifact Submission",
+        description: "Submit the actual work you produced.",
+        methods: ["upload", "text"],
+        primary: "upload",
+        accepted: ".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp"
+    },
+
+    1: {
+        title: "Project / Website Submission",
+        description: "Provide the live result and optionally upload supporting files.",
+        methods: ["url", "upload", "text"],
+        primary: "url",
+        accepted: ".zip,.html,.css,.js,.pdf,.png,.jpg,.jpeg"
+    },
+
+    2: {
+        title: "Research Evidence",
+        description: "Turn in your research and identify the sources you used.",
+        methods: ["upload", "url", "text"],
+        primary: "upload",
+        accepted: ".pdf,.doc,.docx,.txt,.md"
+    },
+
+    3: {
+        title: "Build Submission",
+        description: "Show the finished product rather than simply marking the mission complete.",
+        methods: ["upload", "url", "text"],
+        primary: "url",
+        accepted: ".zip,.html,.css,.js,.pdf,.png,.jpg,.jpeg"
+    },
+
+    4: {
+        title: "Portfolio Evidence",
+        description: "Submit the portfolio artifact or provide the page where it can be reviewed.",
+        methods: ["url", "upload"],
+        primary: "url",
+        accepted: ".pdf,.png,.jpg,.jpeg,.webp"
+    },
+
+    5: {
+        title: "Action Evidence",
+        description: "Document what you actually did and provide supporting evidence.",
+        methods: ["upload", "text", "url"],
+        primary: "upload",
+        accepted: ".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx"
+    },
+
+    6: {
+        title: "Verification Submission",
+        description: "Provide evidence that another person could independently inspect.",
+        methods: ["url", "upload", "text"],
+        primary: "url",
+        accepted: ".pdf,.png,.jpg,.jpeg,.zip"
+    },
+
+    7: {
+        title: "Final Portfolio Submission",
+        description: "Submit the strongest evidence package you can produce.",
+        methods: ["url", "upload", "text"],
+        primary: "url",
+        accepted: ".zip,.pdf,.doc,.docx,.png,.jpg,.jpeg"
+    }
+};
+
+
+/* =========================================================
+   STATE
+   ========================================================= */
+
+const DEFAULT_STATE = {
+    version: 3,
+    xp: 0,
+    missions: [],
+    auditItems: [],
+    challengeDays: [],
+    streak: 0,
+    lastActivity: null,
+    submissions: {},
+    bossDefeated: false
+};
+
+let state = loadState();
+
+
+/* =========================================================
+   SAFE STATE LOADING
+   ========================================================= */
+
+function loadState() {
+
+    let saved = {};
+
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+
+        if (raw) {
+            saved = JSON.parse(raw) || {};
+        }
+    } catch (error) {
+        console.warn("Could not read saved progress.", error);
+    }
+
+    const missions =
+        Array.isArray(saved.missions)
+            ? [...new Set(saved.missions.map(Number))]
+            : [];
+
+    const auditItems =
+        Array.isArray(saved.auditItems)
+            ? [...new Set(saved.auditItems.map(Number))]
+            : Array.from(
+                {
+                    length: Math.min(
+                        Number(saved.audit) || 0,
+                        document.querySelectorAll(".auditCheck").length || 5
+                    )
+                },
+                (_, i) => i
+            );
+
+    const challengeDays =
+        Array.isArray(saved.challengeDays)
+            ? [...new Set(saved.challengeDays.map(Number))]
+            : Array.from(
+                {
+                    length: Math.min(
+                        Number(saved.challenge) || 0,
+                        document.querySelectorAll(".challenge-card").length || 8
+                    )
+                },
+                (_, i) => i
+            );
+
+    return {
+        ...DEFAULT_STATE,
+        ...saved,
+        missions,
+        auditItems,
+        challengeDays,
+        submissions:
+            saved.submissions &&
+            typeof saved.submissions === "object"
+                ? saved.submissions
+                : {}
+    };
+}
+
+
+/* =========================================================
+   SAVE
+   ========================================================= */
+
+function save() {
+
+    state.version = 3;
+
+    state.completed = state.missions.length;
+    state.audit = state.auditItems.length;
+    state.challenge = state.challengeDays.length;
+
+    try {
+        localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify(state)
+        );
+    } catch (error) {
+        console.warn("Could not save progress.", error);
+    }
+}
+
+
+/* =========================================================
+   INDEXED DB
+   Stores actual uploaded files.
+   ========================================================= */
+
+let dbPromise = null;
+
+function openEvidenceDB() {
+
+    if (dbPromise) {
+        return dbPromise;
+    }
+
+    dbPromise = new Promise((resolve, reject) => {
+
+        const request = indexedDB.open(
+            DB_NAME,
+            DB_VERSION
+        );
+
+        request.onupgradeneeded = event => {
+
+            const db = event.target.result;
+
+            if (!db.objectStoreNames.contains("files")) {
+
+                db.createObjectStore(
+                    "files",
+                    {
+                        keyPath: "id"
+                    }
+                );
+            }
+        };
+
+        request.onsuccess = event => {
+            resolve(event.target.result);
+        };
+
+        request.onerror = () => {
+            reject(request.error);
+        };
+    });
+
+    return dbPromise;
+}
+
+
+async function storeEvidenceFile(file, missionIndex) {
+
+    const db = await openEvidenceDB();
+
+    const id =
+        "mission-" +
+        missionIndex +
+        "-" +
+        Date.now() +
+        "-" +
+        crypto.randomUUID();
+
+    const record = {
+        id,
+        missionIndex,
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        uploadedAt: new Date().toISOString(),
+        blob: file
+    };
+
+    return new Promise((resolve, reject) => {
+
+        const transaction =
+            db.transaction(
+                ["files"],
+                "readwrite"
+            );
+
+        transaction.objectStore("files")
+            .put(record);
+
+        transaction.oncomplete = () => {
+            resolve(record);
+        };
+
+        transaction.onerror = () => {
+            reject(transaction.error);
+        };
+    });
+}
+
+
+async function getEvidenceFile(id) {
+
+    const db = await openEvidenceDB();
+
+    return new Promise((resolve, reject) => {
+
+        const transaction =
+            db.transaction(
+                ["files"],
+                "readonly"
+            );
+
+        const request =
+            transaction.objectStore("files")
+                .get(id);
+
+        request.onsuccess = () => {
+            resolve(request.result);
+        };
+
+        request.onerror = () => {
+            reject(request.error);
+        };
+    });
+}
+
+
+/* =========================================================
+   SHA-256 FILE FINGERPRINT
+   Helps create a stronger accountability record.
+   ========================================================= */
+
+async function hashFile(file) {
+
+    try {
+
+        const buffer =
+            await file.arrayBuffer();
+
+        const hashBuffer =
+            await crypto.subtle.digest(
+                "SHA-256",
+                buffer
+            );
+
+        return Array.from(
+            new Uint8Array(hashBuffer)
+        )
+        .map(
+            byte =>
+                byte
+                    .toString(16)
+                    .padStart(2, "0")
+        )
+        .join("");
+
+    } catch (error) {
+
+        return null;
+    }
+}
+
+
+/* =========================================================
+   ACTIVITY / STREAK
+   ========================================================= */
+
+function localDateKey(date = new Date()) {
+
+    return [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, "0"),
+        String(date.getDate()).padStart(2, "0")
+    ].join("-");
+}
+
+
+function dateDifference(a, b) {
+
+    const first =
+        new Date(a + "T00:00:00");
+
+    const second =
+        new Date(b + "T00:00:00");
+
+    return Math.round(
+        (second - first) /
+        86400000
+    );
+}
+
+
+function recordActivity() {
+
+    const today =
+        localDateKey();
+
+    if (!state.lastActivity) {
+
+        state.streak = 1;
+
+    } else {
+
+        const difference =
+            dateDifference(
+                state.lastActivity,
+                today
+            );
+
+        if (difference === 1) {
+
+            state.streak++;
+
+        } else if (difference > 1) {
+
+            state.streak = 1;
+        }
+    }
+
+    state.lastActivity = today;
+}
+
+
+/* =========================================================
+   XP
+   ========================================================= */
+
+function addXP(amount) {
+
+    state.xp =
+        Math.min(
+            MAX_XP,
+            Math.max(
+                0,
+                state.xp + amount
+            )
+        );
+}
+
+
+/* =========================================================
+   TOAST
+   ========================================================= */
+
+function toast(title, message) {
+
+    let box =
+        document.querySelector(".toast");
+
+    if (!box) {
+
+        box =
+            document.createElement("div");
+
+        box.className = "toast";
+
+        box.innerHTML = `
+            <strong class="toast-title"></strong>
+            <span class="toast-message"></span>
+        `;
+
+        document.body.appendChild(box);
+
+        if (!document.querySelector("#accountabilityStyles")) {
+
+            const style =
+                document.createElement("style");
+
+            style.id =
+                "accountabilityStyles";
+
+            style.textContent = `
+                .toast{
+                    position:fixed;
+                    right:24px;
+                    bottom:24px;
+                    z-index:99999;
+                    max-width:360px;
+                    padding:16px 18px;
+                    border:1px solid rgba(255,255,255,.14);
+                    border-radius:14px;
+                    background:#111a22;
+                    color:white;
+                    box-shadow:0 20px 60px rgba(0,0,0,.4);
+                    transform:translateY(30px);
+                    opacity:0;
+                    transition:.25s ease;
+                }
+
+                .toast.show{
+                    transform:translateY(0);
+                    opacity:1;
+                }
+
+                .toast-title{
+                    display:block;
+                    margin-bottom:5px;
+                }
+
+                .toast-message{
+                    display:block;
+                    color:#b9c4ce;
+                    font-size:.9rem;
+                    line-height:1.5;
+                }
+
+                .submission-status{
+                    display:inline-flex;
+                    align-items:center;
+                    gap:6px;
+                    margin-top:10px;
+                    padding:5px 9px;
+                    border-radius:999px;
+                    font-size:.72rem;
+                    font-weight:700;
+                    background:rgba(76,175,80,.14);
+                    color:#8fe39a;
+                }
+
+                .turn-in-btn{
+                    width:100%;
+                    margin-top:12px;
+                    cursor:pointer;
+                }
+
+                .mission-submitted{
+                    opacity:.85;
+                }
+            `;
+
+            document.head.appendChild(style);
+        }
+    }
+
+    box.querySelector(".toast-title")
+        .textContent = title;
+
+    box.querySelector(".toast-message")
+        .textContent = message;
+
+    box.classList.add("show");
+
+    clearTimeout(
+        box._timer
+    );
+
+    box._timer =
+        setTimeout(
+            () => box.classList.remove("show"),
+            3000
+        );
+}
+
+
+/* =========================================================
+   SUBMISSION MODAL
+   ========================================================= */
+
+function openSubmission(missionIndex) {
+
+    const rule =
+        submissionRules[missionIndex] ||
+        {
+            title: "Work Submission",
+            description: "Provide evidence of the work you completed.",
+            methods: ["upload", "url", "text"],
+            primary: "upload",
+            accepted: ""
+        };
+
+    const existing =
+        state.submissions[missionIndex];
+
+    closeSubmission();
+
+    const overlay =
+        document.createElement("div");
+
+    overlay.id =
+        "submissionOverlay";
+
+    overlay.innerHTML = `
+        <div class="submission-modal">
+
+            <button
+                class="submission-close"
+                type="button"
+                onclick="closeSubmission()">
+                ×
+            </button>
+
+            <div class="submission-kicker">
+                ACCOUNTABILITY CHECKPOINT
+            </div>
+
+            <h2>
+                ${escapeHTML(rule.title)}
+            </h2>
+
+            <p class="submission-description">
+                ${escapeHTML(rule.description)}
+            </p>
+
+            <div class="evidence-principle">
+                <strong>Don't just say you did it.</strong>
+                Submit evidence that makes the result inspectable.
+            </div>
+
+            <div class="submission-tabs">
+
+                ${rule.methods.map(
+                    method => `
+                        <button
+                            type="button"
+                            class="submission-tab ${
+                                method === rule.primary
+                                    ? "active"
+                                    : ""
+                            }"
+                            onclick="switchSubmissionMethod('${method}')">
+
+                            ${submissionMethodLabel(method)}
+
+                        </button>
+                    `
+                ).join("")}
+
+            </div>
+
+            <div
+                id="submissionFields"
+                data-mission="${missionIndex}">
+            </div>
+
+            <div class="previous-submission">
+                ${
+                    existing
+                        ? `
+                            <strong>Previous submission recorded</strong>
+                            <span>
+                                ${formatDate(existing.submittedAt)}
+                            </span>
+                          `
+                        : `
+                            <span>
+                                No submission recorded yet.
+                            </span>
+                          `
+                }
+            </div>
+
+            <button
+                type="button"
+                class="submit-evidence-button"
+                onclick="submitEvidence(${missionIndex})">
+
+                Turn In Work
+
+            </button>
+
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    if (!document.querySelector("#submissionModalStyles")) {
+
+        const style =
+            document.createElement("style");
+
+        style.id =
+            "submissionModalStyles";
+
+        style.textContent = `
+
+            #submissionOverlay{
+                position:fixed;
+                inset:0;
+                z-index:99998;
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                padding:20px;
+                background:rgba(3,8,12,.82);
+                backdrop-filter:blur(12px);
+            }
+
+            .submission-modal{
+                position:relative;
+                width:min(680px,100%);
+                max-height:90vh;
+                overflow:auto;
+                padding:30px;
+                border:1px solid rgba(255,255,255,.12);
+                border-radius:22px;
+                background:#101a23;
+                color:#fff;
+                box-shadow:0 30px 100px rgba(0,0,0,.55);
+            }
+
+            .submission-close{
+                position:absolute;
+                top:16px;
+                right:18px;
+                border:0;
+                background:none;
+                color:#9aa8b5;
+                font-size:30px;
+                cursor:pointer;
+            }
+
+            .submission-kicker{
+                margin-bottom:8px;
+                color:#9bb9d1;
+                font-size:.72rem;
+                font-weight:800;
+                letter-spacing:.14em;
+            }
+
+            .submission-modal h2{
+                margin:0 40px 10px 0;
+                font-size:1.8rem;
+            }
+
+            .submission-description{
+                color:#b9c5cf;
+                line-height:1.6;
+            }
+
+            .evidence-principle{
+                margin:20px 0;
+                padding:15px;
+                border-left:3px solid currentColor;
+                border-radius:8px;
+                background:rgba(255,255,255,.04);
+                color:#d9e2e8;
+                line-height:1.5;
+            }
+
+            .submission-tabs{
+                display:flex;
+                flex-wrap:wrap;
+                gap:8px;
+                margin:20px 0;
+            }
+
+            .submission-tab{
+                padding:10px 13px;
+                border:1px solid rgba(255,255,255,.12);
+                border-radius:10px;
+                background:#17232e;
+                color:#b9c5cf;
+                cursor:pointer;
+            }
+
+            .submission-tab.active{
+                background:#263949;
+                color:white;
+            }
+
+            .submission-field{
+                display:block;
+                margin:16px 0;
+            }
+
+            .submission-field span{
+                display:block;
+                margin-bottom:7px;
+                font-size:.82rem;
+                font-weight:700;
+            }
+
+            .submission-field input,
+            .submission-field textarea{
+                width:100%;
+                padding:13px;
+                border:1px solid rgba(255,255,255,.12);
+                border-radius:10px;
+                outline:none;
+                background:#0a1219;
+                color:white;
+                font:inherit;
+            }
+
+            .submission-field textarea{
+                min-height:130px;
+                resize:vertical;
+            }
+
+            .drop-zone{
+                padding:28px 18px;
+                text-align:center;
+                border:1px dashed rgba(255,255,255,.25);
+                border-radius:14px;
+                background:rgba(255,255,255,.025);
+                cursor:pointer;
+            }
+
+            .drop-zone.dragging{
+                background:rgba(255,255,255,.08);
+            }
+
+            .file-name{
+                margin-top:10px;
+                color:#a9d3ff;
+                font-size:.85rem;
+            }
+
+            .previous-submission{
+                display:flex;
+                justify-content:space-between;
+                gap:15px;
+                margin-top:20px;
+                padding:12px;
+                border-radius:10px;
+                background:rgba(255,255,255,.04);
+                color:#aebbc6;
+                font-size:.8rem;
+            }
+
+            .submit-evidence-button{
+                width:100%;
+                margin-top:16px;
+                padding:14px 18px;
+                border:0;
+                border-radius:12px;
+                background:#dce8ef;
+                color:#0b1117;
+                font-weight:800;
+                cursor:pointer;
+            }
+
+            .submit-evidence-button:hover{
+                transform:translateY(-1px);
+            }
+        `;
+
+        document.head.appendChild(style);
+    }
+
+    switchSubmissionMethod(rule.primary);
+}
+
+
+function submissionMethodLabel(method) {
+
+    const labels = {
+        upload: "Upload Evidence",
+        url: "Post / Link Evidence",
+        text: "Written Evidence"
+    };
+
+    return labels[method] || method;
+}
+
+
+function switchSubmissionMethod(method) {
+
+    const fields =
+        document.querySelector("#submissionFields");
+
+    if (!fields) return;
+
+    const missionIndex =
+        Number(fields.dataset.mission);
+
+    const rule =
+        submissionRules[missionIndex] || {};
+
+    if (method === "upload") {
+
+        fields.innerHTML = `
+
+            <label class="submission-field">
+
+                <span>
+                    Upload your completed work
+                </span>
+
+                <div
+                    class="drop-zone"
+                    id="dropZone"
+                    onclick="document.querySelector('#evidenceFile').click()">
+
+                    <strong>
+                        Choose a file or drag it here
+                    </strong>
+
+                    <br>
+
+                    <small>
+                        ${
+                            rule.accepted ||
+                            "Documents, images, ZIP files, etc."
+                        }
+                    </small>
+
+                    <div
+                        class="file-name"
+                        id="fileName">
+                    </div>
+
+                </div>
+
+                <input
+                    id="evidenceFile"
+                    type="file"
+                    accept="${rule.accepted || "*/*"}"
+                    style="display:none">
+
+            </label>
+
+            <label class="submission-field">
+
+                <span>
+                    What does this file prove?
+                </span>
+
+                <textarea
+                    id="evidenceNotes"
+                    placeholder="Briefly explain what you completed and what someone should inspect..."
+                ></textarea>
+
+            </label>
+        `;
+
+        const input =
+            document.querySelector("#evidenceFile");
+
+        input.addEventListener(
+            "change",
+            showSelectedFile
+        );
+
+        const dropZone =
+            document.querySelector("#dropZone");
+
+        dropZone.addEventListener(
+            "dragover",
+            event => {
+                event.preventDefault();
+                dropZone.classList.add("dragging");
+            }
+        );
+
+        dropZone.addEventListener(
+            "dragleave",
+            () => {
+                dropZone.classList.remove("dragging");
+            }
+        );
+
+        dropZone.addEventListener(
+            "drop",
+            event => {
+
+                event.preventDefault();
+
+                dropZone.classList.remove(
+                    "dragging"
+                );
+
+                const files =
+                    event.dataTransfer.files;
+
+                if (files.length) {
+
+                    input.files =
+                        files;
+
+                    showSelectedFile();
+                }
+            }
+        );
+    }
+
+
+    if (method === "url") {
+
+        fields.innerHTML = `
+
+            <label class="submission-field">
+
+                <span>
+                    Public URL / Posted Work
+                </span>
+
+                <input
+                    id="evidenceURL"
+                    type="url"
+                    placeholder="https://..."
+                    autocomplete="url">
+
+            </label>
+
+            <label class="submission-field">
+
+                <span>
+                    What should be inspected?
+                </span>
+
+                <textarea
+                    id="evidenceNotes"
+                    placeholder="Tell the reviewer exactly what this link demonstrates..."
+                ></textarea>
+
+            </label>
+
+            <div class="evidence-principle">
+                Your submission records the URL and the exact
+                time you turned it in. The system does not pretend
+                that a URL is proof merely because it exists.
+            </div>
+        `;
+    }
+
+
+    if (method === "text") {
+
+        fields.innerHTML = `
+
+            <label class="submission-field">
+
+                <span>
+                    Submit your work
+                </span>
+
+                <textarea
+                    id="evidenceText"
+                    placeholder="Write your completed response, analysis, plan, reflection, or other required work..."
+                ></textarea>
+
+            </label>
+
+            <label class="submission-field">
+
+                <span>
+                    Evidence / verification notes
+                </span>
+
+                <textarea
+                    id="evidenceNotes"
+                    placeholder="What did you actually produce? What changed? What can be checked?"
+                ></textarea>
+
+            </label>
+        `;
+    }
+
+    document
+        .querySelectorAll(".submission-tab")
+        .forEach(button => {
+
+            button.classList.toggle(
+                "active",
+                button.textContent
+                    .toLowerCase()
+                    .includes(
+                        submissionMethodLabel(method)
+                            .toLowerCase()
+                            .split(" ")[0]
+                    )
+            );
+        });
+}
+
+
+function showSelectedFile() {
+
+    const input =
+        document.querySelector("#evidenceFile");
+
+    const output =
+        document.querySelector("#fileName");
+
+    if (!input || !output) return;
+
+    if (input.files.length) {
+
+        const file =
+            input.files[0];
+
+        output.textContent =
+            `${file.name} — ${formatBytes(file.size)}`;
+    }
+}
+
+
+/* =========================================================
+   TURN IN EVIDENCE
+   ========================================================= */
+
+async function submitEvidence(missionIndex) {
+
+    const fields =
+        document.querySelector("#submissionFields");
+
+    if (!fields) return;
+
+    const method =
+        detectActiveSubmissionMethod();
+
+    const timestamp =
+        new Date().toISOString();
+
+    const submission = {
+        missionIndex,
+        method,
+        submittedAt: timestamp,
+        status: "SUBMITTED",
+        notes: ""
+    };
+
+
+    /* -------------------------
+       UPLOAD
+       ------------------------- */
+
+    if (method === "upload") {
+
+        const input =
+            document.querySelector("#evidenceFile");
+
+        if (!input || !input.files.length) {
+
+            toast(
+                "Evidence Required",
+                "Upload the work before turning in this mission."
+            );
+
+            return;
+        }
+
+        const file =
+            input.files[0];
+
+        const hash =
+            await hashFile(file);
+
+        const stored =
+            await storeEvidenceFile(
+                file,
+                missionIndex
+            );
+
+        submission.fileId =
+            stored.id;
+
+        submission.fileName =
+            file.name;
+
+        submission.fileSize =
+            file.size;
+
+        submission.fileType =
+            file.type;
+
+        submission.fileHash =
+            hash;
+
+        submission.notes =
+            document.querySelector(
+                "#evidenceNotes"
+            )?.value.trim() || "";
+    }
+
+
+    /* -------------------------
+       URL
+       ------------------------- */
+
+    if (method === "url") {
+
+        const urlInput =
+            document.querySelector("#evidenceURL");
+
+        const url =
+            urlInput?.value.trim();
+
+        if (!url) {
+
+            toast(
+                "Link Required",
+                "Provide the URL where the work can be inspected."
+            );
+
+            return;
+        }
+
+        let parsed;
+
+        try {
+
+            parsed =
+                new URL(url);
+
+        } catch {
+
+            toast(
+                "Invalid URL",
+                "Enter a complete URL beginning with https://"
+            );
+
+            return;
+        }
+
+        if (
+            parsed.protocol !== "http:" &&
+            parsed.protocol !== "https:"
+        ) {
+
+            toast(
+                "Invalid Link",
+                "Use an http:// or https:// URL."
+            );
+
+            return;
+        }
+
+        submission.url =
+            parsed.href;
+
+        submission.notes =
+            document.querySelector(
+                "#evidenceNotes"
+            )?.value.trim() || "";
+    }
+
+
+    /* -------------------------
+       WRITTEN WORK
+       ------------------------- */
+
+    if (method === "text") {
+
+        const text =
+            document.querySelector(
+                "#evidenceText"
+            )?.value.trim();
+
+        if (!text) {
+
+            toast(
+                "Work Required",
+                "Write your completed response before turning it in."
+            );
+
+            return;
+        }
+
+        submission.text =
+            text;
+
+        submission.notes =
+            document.querySelector(
+                "#evidenceNotes"
+            )?.value.trim() || "";
+    }
+
+
+    /* -------------------------
+       SAVE SUBMISSION
+       ------------------------- */
+
+    if (!state.submissions[missionIndex]) {
+
+        state.submissions[missionIndex] = [];
+    }
+
+    if (!Array.isArray(
+        state.submissions[missionIndex]
+    )) {
+
+        state.submissions[missionIndex] = [];
+    }
+
+    state.submissions[missionIndex]
+        .push(submission);
+
+
+    /* -------------------------
+       CREDIT MISSION
+       ------------------------- */
+
+    if (
+        !state.missions.includes(
+            missionIndex
+        )
+    ) {
+
+        const card =
+            document.querySelectorAll(
+                ".mission-card"
+            )[missionIndex];
+
+        const reward =
+            Number(
+                card?.dataset.xp ||
+                card?.querySelector(
+                    "[data-xp]"
+                )?.dataset.xp ||
+                100
+            );
+
+        state.missions.push(
+            missionIndex
+        );
+
+        addXP(reward);
+
+        recordActivity();
+    }
+
+
+    save();
+    updateAll();
+    restoreMissions();
+
+    closeSubmission();
+
+    toast(
+        "Work Turned In",
+        "Your evidence was recorded. The mission now has an accountability trail."
+    );
+}
+
+
+/* =========================================================
+   DETERMINE ACTIVE METHOD
+   ========================================================= */
+
+function detectActiveSubmissionMethod() {
+
+    const active =
+        document.querySelector(
+            ".submission-tab.active"
+        );
+
+    if (!active) return "upload";
+
+    const text =
+        active.textContent
+            .toLowerCase();
+
+    if (text.includes("upload")) {
+        return "upload";
+    }
+
+    if (
+        text.includes("link") ||
+        text.includes("post")
+    ) {
+        return "url";
+    }
+
+    return "text";
+}
+
+
+/* =========================================================
+   CLOSE MODAL
+   ========================================================= */
+
+function closeSubmission() {
+
+    document
+        .querySelector(
+            "#submissionOverlay"
+        )
+        ?.remove();
+}
+
+
+/* =========================================================
+   MISSION COMPLETION
+   IMPORTANT:
+   Clicking "Complete" now opens the evidence system.
+   It does NOT give credit automatically.
+   ========================================================= */
+
+function completeMission(button) {
+
+    const cards =
+        Array.from(
+            document.querySelectorAll(
+                ".mission-card"
+            )
+        );
+
+    const card =
+        button.closest(".mission-card");
+
+    const missionIndex =
+        cards.indexOf(card);
+
+    if (missionIndex < 0) return;
+
+    if (
+        state.missions.includes(
+            missionIndex
+        )
+    ) {
+
+        toast(
+            "Already Submitted",
+            "This mission already has recorded evidence."
+        );
+
+        return;
+    }
+
+    openSubmission(
+        missionIndex
+    );
+}
+
+
+/* =========================================================
+   PLAYER
+   ========================================================= */
+
+function updatePlayer() {
+
+    const xp =
+        state.xp;
+
+    const level =
+        Math.min(
+            Math.floor(xp / 200) + 1,
+            5
+        );
+
+    const levelStart =
+        (level - 1) * 200;
+
+    const levelEnd =
+        level === 5
+            ? 1000
+            : level * 200;
+
+    const progress =
+        level === 5
+            ? 100
+            : Math.min(
+                100,
+                Math.round(
+                    ((xp - levelStart) /
+                    (levelEnd - levelStart)) *
+                    100
+                )
+            );
+
+    const rank =
+        xp >= 800
+            ? "UNIGNORABLE"
+            : xp >= 600
+                ? "OPERATOR"
+                : xp >= 400
+                    ? "BUILDER"
+                    : xp >= 200
+                        ? "APPRENTICE"
+                        : "STARTER";
+
+    const levelEl =
+        document.querySelector("#level");
+
+    const xpEl =
+        document.querySelector("#xp");
+
+    const missionsEl =
+        document.querySelector("#missionsCompleted");
+
+    const streakEl =
+        document.querySelector("#streak");
+
+    const progressFill =
+        document.querySelector("#progressFill");
+
+    const rankEl =
+        document.querySelector("#rank");
+
+
+    if (levelEl)
+        levelEl.textContent =
+            level;
+
+    if (xpEl)
+        xpEl.textContent =
+            xp;
+
+    if (missionsEl)
+        missionsEl.textContent =
+            state.missions.length;
+
+    if (streakEl)
+        streakEl.textContent =
+            state.streak;
+
+    if (progressFill)
+        progressFill.style.width =
+            progress + "%";
+
+    if (rankEl)
+        rankEl.textContent =
+            rank;
+}
+
+
+/* =========================================================
+   OBJECTIVE
+   ========================================================= */
+
+function updateObjective() {
+
+    const objective =
+        document.querySelector(
+            "#objective"
+        );
+
+    if (!objective) return;
+
+    const cards =
+        document.querySelectorAll(
+            ".mission-card"
+        );
+
+    let next = -1;
+
+    for (
+        let i = 0;
+        i < cards.length;
+        i++
+    ) {
+
+        if (
+            !state.missions.includes(i)
+        ) {
+
+            next = i;
+            break;
+        }
+    }
+
+    if (next === -1) {
+
+        objective.textContent =
+            "All missions submitted. Complete the audit and final challenge.";
+
+        return;
+    }
+
+    const title =
+        cards[next]
+            ?.querySelector("h3")
+            ?.textContent ||
+        "Next mission";
+
+    objective.textContent =
+        title;
+}
+
+
+/* =========================================================
+   SCORE
+   ========================================================= */
+
+function calculateScore() {
+
+    return Math.min(
+        100,
+        Math.round(
+            (
+                state.xp +
+                state.auditItems.length * 25
+            ) / 10
+        )
+    );
+}
+
+
+function updateScore() {
+
+    const score =
+        calculateScore();
+
+    const scoreValue =
+        document.querySelector(
+            "#scoreValue"
+        );
+
+    const scoreCircle =
+        document.querySelector(
+            "#scoreCircle"
+        );
+
+    const scoreMessage =
+        document.querySelector(
+            "#scoreMessage"
+        );
+
+
+    if (scoreValue)
+        scoreValue.textContent =
+            score;
+
+    if (scoreCircle)
+        scoreCircle.style.background =
+            `conic-gradient(
+                currentColor ${score}%,
+                rgba(255,255,255,.08) ${score}%
+            )`;
+
+
+    if (scoreMessage) {
+
+        if (score >= 80) {
+
+            scoreMessage.textContent =
+                "Portfolio operating at a high-performance level.";
+
+        } else if (score >= 60) {
+
+            scoreMessage.textContent =
+                "Strong progress. Increase evidence quality.";
+
+        } else if (score >= 40) {
+
+            scoreMessage.textContent =
+                "Momentum is building. More execution is needed.";
+
+        } else {
+
+            scoreMessage.textContent =
+                "Start producing evidence instead of only planning.";
+        }
+    }
+
+
+    updateCategoryBars();
+}
+
+
+/* =========================================================
+   CATEGORY BARS
+   ========================================================= */
+
+function updateCategoryBars() {
+
+    const completed =
+        state.missions.length;
+
+    const audit =
+        state.auditItems.length;
+
+    const context =
+        Math.min(
+            completed * 20,
+            100
+        );
+
+    const execution =
+        Math.min(
+            Math.max(
+                completed - 1,
+                0
+            ) * 20,
+            100
+        );
+
+    const production =
+        Math.min(
+            Math.max(
+                completed - 3,
+                0
+            ) * 25,
+            100
+        );
+
+    const verification =
+        Math.min(
+            Math.max(
+                completed - 5,
+                0
+            ) * 34 +
+            audit * 10,
+            100
+        );
+
+
+    setBar(
+        "#contextBar",
+        context
+    );
+
+    setBar(
+        "#executionBar",
+        execution
+    );
+
+    setBar(
+        "#productionBar",
+        production
+    );
+
+    setBar(
+        "#verificationBar",
+        verification
+    );
+}
+
+
+function setBar(selector, value) {
+
+    const bar =
+        document.querySelector(
+            selector
+        );
+
+    if (bar) {
+
+        bar.style.width =
+            value + "%";
+    }
+}
+
+
+/* =========================================================
+   ACHIEVEMENTS
+   ========================================================= */
+
+function updateAchievements() {
+
+    const achievements =
+        document.querySelectorAll(
+            ".achievement"
+        );
+
+    achievements.forEach(
+        achievement => {
+
+            achievement.classList.remove(
+                "unlocked"
+            );
+        }
+    );
+
+    const unlocks = [
+
+        state.missions.length >= 1,
+
+        state.missions.length >= 4,
+
+        state.xp >= 400,
+
+        state.missions.length >= 6,
+
+        state.missions.length >= 8
+
+    ];
+
+    achievements.forEach(
+        (achievement, index) => {
+
+            if (unlocks[index]) {
+
+                achievement.classList.add(
+                    "unlocked"
+                );
+            }
+        }
+    );
+}
+
+
+/* =========================================================
+   LEVELS
+   ========================================================= */
+
+function updateLevels() {
+
+    const level =
+        Math.min(
+            Math.floor(state.xp / 200) + 1,
+            5
+        );
+
+    document
+        .querySelectorAll(
+            ".level-card"
+        )
+        .forEach(
+            (card, index) => {
+
+                card.classList.remove(
+                    "current",
+                    "locked"
+                );
+
+                const cardLevel =
+                    index + 1;
+
+                if (
+                    cardLevel === level
+                ) {
+
+                    card.classList.add(
+                        "current"
+                    );
+                }
+
+                if (
+                    cardLevel > level
+                ) {
+
+                    card.classList.add(
+                        "locked"
+                    );
+                }
+            }
+        );
+}
+
+
+/* =========================================================
+   AUDIT SYSTEM
+   ========================================================= */
+
+function setupAudit() {
+
+    document
+        .querySelectorAll(
+            ".auditCheck"
+        )
+        .forEach(
+            (checkbox, index) => {
+
+                checkbox.addEventListener(
+                    "change",
+                    function () {
+
+                        const alreadyChecked =
+                            state.auditItems.includes(
+                                index
+                            );
+
+                        if (
+                            this.checked &&
+                            !alreadyChecked
+                        ) {
+
+                            state.auditItems.push(
+                                index
+                            );
+
+                            addXP(25);
+
+                            recordActivity();
+
+                            toast(
+                                "Audit Evidence Added",
+                                "+25 XP for documenting another verified condition."
+                            );
+
+                        } else if (
+                            !this.checked &&
+                            alreadyChecked
+                        ) {
+
+                            state.auditItems =
+                                state.auditItems.filter(
+                                    item =>
+                                        item !== index
+                                );
+
+                            addXP(-25);
+
+                            toast(
+                                "Audit Reopened",
+                                "The evidence item is no longer counted."
+                            );
+                        }
+
+                        save();
+                        updateAll();
+                    }
+                );
+            }
+        );
+}
+
+
+function restoreAudit() {
+
+    document
+        .querySelectorAll(
+            ".auditCheck"
+        )
+        .forEach(
+            (checkbox, index) => {
+
+                checkbox.checked =
+                    state.auditItems.includes(
+                        index
+                    );
+            }
+        );
+}
+
+
+/* =========================================================
+   7-DAY CHALLENGE
+   ========================================================= */
+
+function completeDay(card) {
+
+    const cards =
+        Array.from(
+            document.querySelectorAll(
+                ".challenge-card"
+            )
+        );
+
+    const index =
+        cards.indexOf(card);
+
+    if (index < 0) return;
+
+    if (
+        state.challengeDays.includes(
+            index
+        )
+    ) {
+
+        toast(
+            "Already Recorded",
+            "This challenge step has already been submitted."
+        );
+
+        return;
+    }
+
+    state.challengeDays.push(
+        index
+    );
+
+    card.classList.add(
+        "done"
+    );
+
+    addXP(25);
+
+    recordActivity();
+
+    save();
+
+    updateAll();
+
+    toast(
+        "Challenge Step Recorded",
+        "+25 XP added."
+    );
+}
+
+
+function restoreChallenge() {
+
+    document
+        .querySelectorAll(
+            ".challenge-card"
+        )
+        .forEach(
+            (card, index) => {
+
+                if (
+                    state.challengeDays.includes(
+                        index
+                    )
+                ) {
+
+                    card.classList.add(
+                        "done"
+                    );
+                }
+            }
+        );
+}
+
+
+function startChallenge() {
+
+    const section =
+        document.querySelector(
+            "#challenge"
+        );
+
+    if (section) {
+
+        section.scrollIntoView({
+            behavior: "smooth"
+        });
+    }
+
+    toast(
+        "Sprint Activated",
+        "Produce evidence every day. The goal is a record of execution, not intention."
+    );
+}
+
+
+/* =========================================================
+   FINAL BOSS
+   ========================================================= */
+
+function attemptBoss() {
+
+    const score =
+        calculateScore();
+
+    const completed =
+        state.missions.length;
+
+    const audit =
+        state.auditItems.length;
+
+    const challenge =
+        state.challengeDays.length;
+
+
+    const requirements = [];
+
+    if (completed < 8) {
+
+        requirements.push(
+            `${8 - completed} more mission submission(s)`
+        );
+    }
+
+    if (score < 80) {
+
+        requirements.push(
+            `score must reach 80 (currently ${score})`
+        );
+    }
+
+    if (audit < 5) {
+
+        requirements.push(
+            `${5 - audit} more audit item(s)`
+        );
+    }
+
+
+    if (requirements.length) {
+
+        toast(
+            "Final Boss Locked",
+            requirements.join(" • ")
+        );
+
+        return;
+    }
+
+
+    state.bossDefeated =
+        true;
+
+    save();
+
+    updateBoss();
+
+    toast(
+        "BOSS DEFEATED",
+        "You produced enough evidence to complete the Portfolio Operator system."
+    );
+}
+
+
+function updateBoss() {
+
+    const score =
+        calculateScore();
+
+    const ready =
+        state.missions.length >= 8 &&
+        state.auditItems.length >= 5 &&
+        score >= 80;
+
+    if (!ready) {
+
+        state.bossDefeated =
+            false;
+    }
+
+    const buttons =
+        document.querySelectorAll(
+            "[onclick*='attemptBoss']"
+        );
+
+    buttons.forEach(
+        button => {
+
+            if (state.bossDefeated) {
+
+                button.textContent =
+                    "BOSS DEFEATED ✓";
+
+                button.disabled =
+                    true;
+
+            } else {
+
+                button.textContent =
+                    "ATTEMPT FINAL BOSS";
+
+                button.disabled =
+                    false;
+            }
+        }
+    );
+}
+
+
+/* =========================================================
+   INDUSTRIES
+   ========================================================= */
+
+const industries = {
+
+    tech: [
+        "Software development",
+        "Cloud infrastructure",
+        "Cybersecurity",
+        "Data analytics",
+        "Product development"
+    ],
+
+    trades: [
+        "Electrical",
+        "HVAC",
+        "Construction",
+        "Welding",
+        "Automotive"
+    ],
+
+    business: [
+        "Sales",
+        "Operations",
+        "Marketing",
+        "Customer success",
+        "Entrepreneurship"
+    ],
+
+    academic: [
+        "Research",
+        "Writing",
+        "Teaching",
+        "Analysis",
+        "Independent study"
+    ]
+};
+
+
+function showIndustry(
+    industry,
+    button
+) {
+
+    document
+        .querySelectorAll(
+            ".tab"
+        )
+        .forEach(
+            tab =>
+                tab.classList.remove(
+                    "active"
+                )
+        );
+
+    if (button) {
+
+        button.classList.add(
+            "active"
+        );
+    }
+
+    const content =
+        document.querySelector(
+            "#industryContent"
+        );
+
+    if (!content) return;
+
+    const items =
+        industries[industry] ||
+        [];
+
+    content.innerHTML =
+        items.map(
+            item => `
+                <div class="industry-card">
+                    <h3>
+                        ${escapeHTML(item)}
+                    </h3>
+
+                    <p>
+                        Build evidence in this area,
+                        then turn the result into a
+                        portfolio asset.
+                    </p>
+                </div>
+            `
+        ).join("");
+}
+
+
+/* =========================================================
+   MISSION RESTORATION
+   ========================================================= */
+
+function restoreMissions() {
+
+    document
+        .querySelectorAll(
+            ".mission-card"
+        )
+        .forEach(
+            (card, index) => {
+
+                const completed =
+                    state.missions.includes(
+                        index
+                    );
+
+                card.classList.toggle(
+                    "mission-submitted",
+                    completed
+                );
+
+
+                const button =
+                    card.querySelector(
+                        "button"
+                    );
+
+                if (!button) return;
+
+
+                if (completed) {
+
+                    button.textContent =
+                        "VIEW / RESUBMIT EVIDENCE";
+
+                    button.disabled =
+                        false;
+
+                } else {
+
+                    button.textContent =
+                        "TURN IN WORK";
+
+                    button.disabled =
+                        false;
+                }
+
+
+                let status =
+                    card.querySelector(
+                        ".submission-status"
+                    );
+
+
+                if (completed && !status) {
+
+                    status =
+                        document.createElement(
+                            "div"
+                        );
+
+                    status.className =
+                        "submission-status";
+
+                    status.textContent =
+                        "✓ EVIDENCE SUBMITTED";
+
+                    card.appendChild(
+                        status
+                    );
+                }
+
+
+                if (
+                    !completed &&
+                    status
+                ) {
+
+                    status.remove();
+                }
+            }
+        );
+}
+
+
+/* =========================================================
+   SUBMISSION HISTORY
+   ========================================================= */
+
+function getLatestSubmission(
+    missionIndex
+) {
+
+    const history =
+        state.submissions[
+            missionIndex
+        ];
+
+    if (
+        !Array.isArray(history) ||
+        !history.length
+    ) {
+
+        return null;
+    }
+
+    return history[
+        history.length - 1
+    ];
+}
+
+
+/* =========================================================
+   EVIDENCE REVIEW PANEL
+   Can be called from console or future UI.
+   ========================================================= */
+
+async function viewSubmission(
+    missionIndex
+) {
+
+    const submission =
+        getLatestSubmission(
+            missionIndex
+        );
+
+    if (!submission) {
+
+        toast(
+            "No Evidence",
+            "There is no recorded submission for this mission."
+        );
+
+        return;
+    }
+
+    if (
+        submission.method === "url"
+    ) {
+
+        window.open(
+            submission.url,
+            "_blank",
+            "noopener,noreferrer"
+        );
+
+        return;
+    }
+
+    if (
+        submission.method === "upload"
+    ) {
+
+        const file =
+            await getEvidenceFile(
+                submission.fileId
+            );
+
+        if (!file) {
+
+            toast(
+                "File Missing",
+                "The uploaded evidence could not be found."
+            );
+
+            return;
+        }
+
+        const url =
+            URL.createObjectURL(
+                file.blob
+            );
+
+        window.open(
+            url,
+            "_blank"
+        );
+
+        setTimeout(
+            () => URL.revokeObjectURL(url),
+            60000
+        );
+
+        return;
+    }
+
+    if (
+        submission.method === "text"
+    ) {
+
+        const popup =
+            window.open(
+                "",
+                "_blank"
+            );
+
+        if (popup) {
+
+            popup.document.write(`
+                <html>
+                <head>
+                    <title>Portfolio Evidence</title>
+                    <style>
+                        body{
+                            max-width:800px;
+                            margin:60px auto;
+                            padding:20px;
+                            font-family:system-ui;
+                            line-height:1.7;
+                        }
+                        pre{
+                            white-space:pre-wrap;
+                            font:inherit;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>Submitted Evidence</h1>
+                    <p>
+                        Submitted:
+                        ${escapeHTML(
+                            formatDate(
+                                submission.submittedAt
+                            )
+                        )}
+                    </p>
+                    <pre>${escapeHTML(
+                        submission.text
+                    )}</pre>
+                </body>
+                </html>
+            `);
+
+            popup.document.close();
+        }
+    }
+}
+
+
+/* =========================================================
+   ESCAPE HTML
+   ========================================================= */
+
+function escapeHTML(value) {
+
+    return String(value ?? "")
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+        .replace(
+            /</g,
+            "&lt;"
+        )
+        .replace(
+            />/g,
+            "&gt;"
+        )
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+        .replace(
+            /'/g,
+            "&#039;"
+        );
+}
+
+
+/* =========================================================
+   FORMATTING
+   ========================================================= */
+
+function formatBytes(bytes) {
+
+    if (!bytes) return "0 B";
+
+    const units = [
+        "B",
+        "KB",
+        "MB",
+        "GB"
+    ];
+
+    const index =
+        Math.floor(
+            Math.log(bytes) /
+            Math.log(1024)
+        );
+
+    return (
+        Math.round(
+            bytes /
+            Math.pow(
+                1024,
+                index
+            ) * 10
+        ) / 10
+    ) +
+    " " +
+    units[index];
+}
+
+
+function formatDate(date) {
+
+    return new Date(date)
+        .toLocaleString(
+            undefined,
+            {
+                dateStyle: "medium",
+                timeStyle: "short"
+            }
+        );
+}
+
+
+/* =========================================================
+   RESET
+   Useful while testing the system.
+   ========================================================= */
+
+function resetPortfolioProgress() {
+
+    const confirmed =
+        confirm(
+            "Reset all Portfolio Operator progress and submissions?"
+        );
+
+    if (!confirmed) return;
+
+    localStorage.removeItem(
+        STORAGE_KEY
+    );
+
+    state =
+        structuredClone(
+            DEFAULT_STATE
+        );
+
+    location.reload();
+}
+
+
+/* =========================================================
+   GLOBAL UPDATE
+   ========================================================= */
+
+function updateAll() {
+
+    updatePlayer();
+    updateObjective();
+    updateScore();
+    updateAchievements();
+    updateLevels();
+    updateBoss();
+
+    save();
+}
+
+
+/* =========================================================
+   INITIALIZATION
+   ========================================================= */
+
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+
+        setupAudit();
+
+        restoreAudit();
+
+        restoreChallenge();
+
+        restoreMissions();
+
+        updateAll();
+
+        const firstTab =
+            document.querySelector(
+                ".tab"
+            );
+
+        if (firstTab) {
+
+            showIndustry(
+                "tech",
+                firstTab
+            );
+        }
+    }
+);
+
+
+/* =========================================================
+   MAKE INLINE HTML EVENTS AVAILABLE
+   ========================================================= */
+
+window.completeMission =
+    completeMission;
+
+window.openSubmission =
+    openSubmission;
+
+window.closeSubmission =
+    closeSubmission;
+
+window.switchSubmissionMethod =
+    switchSubmissionMethod;
+
+window.submitEvidence =
+    submitEvidence;
+
+window.completeDay =
+    completeDay;
+
+window.startChallenge =
+    startChallenge;
+
+window.attemptBoss =
+    attemptBoss;
+
+window.showIndustry =
+    showIndustry;
+
+window.viewSubmission =
+    viewSubmission;
+
+window.resetPortfolioProgress =
+    resetPortfolioProgress;
+
+</script>
